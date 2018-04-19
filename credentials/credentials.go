@@ -89,6 +89,9 @@ type TransportCredentials interface {
 	// If the returned error is a wrapper error, implementations should make sure that
 	// the error implements Temporary() to have the correct retry behaviors.
 	//
+	// The string argument will be a ServerName to validate server certificates
+	// against.
+	//
 	// If the returned net.Conn is closed, it MUST close the net.Conn provided.
 	ClientHandshake(context.Context, string, net.Conn) (net.Conn, AuthInfo, error)
 	// ServerHandshake does the authentication handshake for servers. It returns
@@ -132,15 +135,15 @@ func (c tlsCreds) Info() ProtocolInfo {
 	}
 }
 
-func (c *tlsCreds) ClientHandshake(ctx context.Context, authority string, rawConn net.Conn) (_ net.Conn, _ AuthInfo, err error) {
+func (c *tlsCreds) ClientHandshake(ctx context.Context, serverName string, rawConn net.Conn) (_ net.Conn, _ AuthInfo, err error) {
 	// use local cfg to avoid clobbering ServerName if using multiple endpoints
 	cfg := cloneTLSConfig(c.config)
 	if cfg.ServerName == "" {
-		colonPos := strings.LastIndex(authority, ":")
+		colonPos := strings.LastIndex(serverName, ":")
 		if colonPos == -1 {
-			colonPos = len(authority)
+			colonPos = len(serverName)
 		}
-		cfg.ServerName = authority[:colonPos]
+		cfg.ServerName = serverName[:colonPos]
 	}
 	conn := tls.Client(rawConn, cfg)
 	errChannel := make(chan error, 1)
@@ -175,23 +178,30 @@ func (c *tlsCreds) OverrideServerName(serverNameOverride string) error {
 	return nil
 }
 
-// NewTLS uses c to construct a TransportCredentials based on TLS.
+// NewTLS constructs transport credentials from a tls.Config. It can be used by
+// either a server or a client. If used for a server, the provided config should
+// contain at least a Certificates field. If used for a client, the provided
+// config should contain at least a RootCAs field.
 func NewTLS(c *tls.Config) TransportCredentials {
 	tc := &tlsCreds{cloneTLSConfig(c)}
 	tc.config.NextProtos = alpnProtoStr
 	return tc
 }
 
-// NewClientTLSFromCert constructs TLS credentials from the input certificate for client.
+// NewClientTLSFromCert constructs client credentials that will trust certificates based
+// on the list of roots in the provided CertPool.
 // serverNameOverride is for testing only. If set to a non empty string,
-// it will override the virtual host name of authority (e.g. :authority header field) in requests.
+// it will be used for validation against server certificate subjects, instead
+// of the default value (which may come from the ServerName field of the
+// ProtocolInfo returned from TransportCredentials.Info, or the Endpoint of a
+// resolver.Target (typically provided to ClientConn.Dial as
+// "scheme://authority/endpoint").
 func NewClientTLSFromCert(cp *x509.CertPool, serverNameOverride string) TransportCredentials {
 	return NewTLS(&tls.Config{ServerName: serverNameOverride, RootCAs: cp})
 }
 
-// NewClientTLSFromFile constructs TLS credentials from the input certificate file for client.
-// serverNameOverride is for testing only. If set to a non empty string,
-// it will override the virtual host name of authority (e.g. :authority header field) in requests.
+// NewClientTLSFromFile acts like NewClientTLSFromCert, but reads from the
+// provided filename to built a CertPool.
 func NewClientTLSFromFile(certFile, serverNameOverride string) (TransportCredentials, error) {
 	b, err := ioutil.ReadFile(certFile)
 	if err != nil {
@@ -204,13 +214,14 @@ func NewClientTLSFromFile(certFile, serverNameOverride string) (TransportCredent
 	return NewTLS(&tls.Config{ServerName: serverNameOverride, RootCAs: cp}), nil
 }
 
-// NewServerTLSFromCert constructs TLS credentials from the input certificate for server.
+// NewServerTLSFromCert constructs server credentials that will offer the
+// provided Certificate to clients.
 func NewServerTLSFromCert(cert *tls.Certificate) TransportCredentials {
 	return NewTLS(&tls.Config{Certificates: []tls.Certificate{*cert}})
 }
 
-// NewServerTLSFromFile constructs TLS credentials from the input certificate file and key
-// file for server.
+// NewServerTLSFromFile acts like NewServerTLSFromCert, but reads from the
+// provided certificate and key file in order to build a tls.Certificate.
 func NewServerTLSFromFile(certFile, keyFile string) (TransportCredentials, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
