@@ -111,10 +111,28 @@ type ClientConn interface {
 
 // Target represents a target for gRPC, as specified in:
 // https://github.com/grpc/grpc/blob/master/doc/naming.md.
+// Targets are parsed from URLs in the format
+// "scheme://authority/endpoint", passed to grpc.Dial.
+// If you are defining your own resolver, you will need to handle Target as an
+// input to the Build function on the Builder type you define.
 type Target struct {
-	Scheme    string
+	// Scheme represents a type of resolver, for instance "dns" or "etcd".
+	Scheme string
+	// Authority indicates where to get data in the provided resolver scheme. For
+	// instance, with the "dns" scheme, Authority contains the IP address or
+	// hostname of a DNS server. With the "manual" scheme, Authority can have any
+	// value; it's not used. This field should not be confused with the
+	// ":authority" HTTP/2 pseudo-header.
 	Authority string
-	Endpoint  string
+	// Endpoint indicates a name for this target. For instance, in the "dns"
+	// scheme this will be the hostname that is looked up to find a set of IP
+	// addresses.
+	// Besides resolving, Endpoint will also be used by default for three things:
+	//  - The ServerName to send in the ServerNameIndication extension when
+	//    connecting to a server via TLS.
+	//  - The ServerName to validate server certificates against.
+	//  - The HTTP/2 :authority pseudo-header (equivalent to Host: in HTTP/1.1).
+	Endpoint string
 }
 
 // Builder creates a resolver that will be used to watch name resolution updates.
